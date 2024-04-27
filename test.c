@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/mman.h>
+#include <sys/wait.h>
+#include <signal.h>
 
 sem_t *mysem;
 sem_t *mysem1;
@@ -95,9 +97,12 @@ void skiist(Skiist *skiist, Bus *bus, Route *route)
 				sem_wait(bus->gone);//no one can get in after bus has gone
 				sem_post(route->gl_inout);
 				///END OF CRITICAL SECTION MUTEX1///
-			}
+			}else
+				sem_post(route->gl_inout);
+			break;
 		}else
 		{
+			sem_post(bus->capacity);
 			sem_post(route->gl_inout);
 			///END OF CRITICAL SECTION MUTEX1///
 			continue;//viz upper
@@ -116,6 +121,7 @@ void skiist(Skiist *skiist, Bus *bus, Route *route)
 	if(route->to_drop[skiist->to-1] == 0 && route->to_pick[skiist->to-1] == 0)//CRITICAL DATA
 	{
 		sem_post(bus->can_start);
+		//printf("let it go\n");
 		//bus sets isbus[skiist->to-1] to 0
 		sem_wait(bus->gone); //and only then release any mutex at the end
 	}
@@ -168,17 +174,35 @@ int main(int argc, char** argv)
 	{
                 bus(&skibus, &skitour);
 		return 0;
+	}else if(check_pid < 0) 
+	{
+		kill(check_pid, 9);
+		return 1;
 	}
+
 	for(int skiist_num = 0; skiist_num < args[0]; skiist_num++)
 	{
-		check_pid = fork();
-		if(check_pid == 0)
+		int skiist_pid = fork();
+		if(skiist_pid < 0)
+		{
+			kill(skiist_pid, 9);
+			return 1;
+		}else if(skiist_pid == 0)
 		{
 			srand(skiist_num * (int)getpid());
 			Skiist my_skiist = {skiist_num+1, rand()%(skitour.num_of_stations-1)+1, 0, args[3]};
 			my_skiist.to = my_skiist.from + rand()%(skitour.num_of_stations - my_skiist.from) + 1;
 			skiist(&my_skiist, &skibus, &skitour);
 			return 0;
+		}
+	}
+	int finished_proc, status;
+	while((finished_proc = wait(&status)) > 0)
+	{
+		if(WEXITSTATUS(status) != 0 || WTERMSIG(status))
+		{
+			printf("SMT WRONG..., %d\n", WTERMSIG(status));
+			return 1;
 		}
 	}
 	return 0;
