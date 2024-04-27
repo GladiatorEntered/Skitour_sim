@@ -72,8 +72,16 @@ Route route_init(int num_of_stations)
 }
 
 
-void bus(Bus *bus, Route *route)
+int bus(Bus *bus, Route *route)
 {
+	int check_pid = fork();
+	if(check_pid < 0)
+	{
+		printf("Failed to create a \"bus\" process\n");
+		return -1;
+	}else if(check_pid > 0)
+		return check_pid;
+
 	while((*bus->total_passengers_left_ptr) != 0)
 	{
 		for(int station = 0; station < route->num_of_stations; station++)
@@ -99,7 +107,7 @@ void bus(Bus *bus, Route *route)
 			printf("Bus goes to station %d\n", station+2);
 		}
 	}
-	return;
+	return 0;
 }
 
 void skiist(Skiist *skiist, Bus *bus, Route *route)
@@ -200,16 +208,15 @@ int main(int argc, char** argv)
 	Bus skibus = bus_init(args[2], args[0], args[4]); 
 	
 	Route skitour = route_init(args[1]);
-
-        int check_pid = fork();
-        if(check_pid == 0)
+	int busproc;
+        switch(busproc = bus(&skibus, &skitour))
 	{
-                bus(&skibus, &skitour);
-		return 0;
-	}else if(check_pid < 0) 
-	{
-		kill(check_pid, 9);
-		return 1;
+		case -1: 
+			return 1;
+		case 0:
+			return 0;
+		default:
+			break;
 	}
 
 	for(int skiist_num = 0; skiist_num < args[0]; skiist_num++)
