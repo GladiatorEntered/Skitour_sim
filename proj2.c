@@ -27,6 +27,7 @@ typedef struct route_t{
 	sem_t *gl_inout;//statistics controller
 	sem_t *cnt_mutex;
 	sem_t **isbus;
+	FILE *logfile;
 } Route;
 
 typedef struct skiist_t{
@@ -127,7 +128,13 @@ Route route_init(int num_of_stations)
 			route.num_of_stations = -1;
 		}
 	}
-
+	
+	if((route.logfile = fopen("proj2.out","w")) == NULL)
+	{
+		printf("Log file failed to open!\n");
+		route.num_of_stations = -1;
+	}else
+		setvbuf(route.logfile, NULL, _IONBF, 0);
 	return route;
 }
 
@@ -137,8 +144,11 @@ int route_cleanup(Route *route)
 	int sem_control = 0;
 	sem_control += sem_destroy(route->gl_inout);
 	mmap_control += munmap(route->gl_inout, sizeof(sem_t));
+	sem_control += sem_destroy(route->cnt_mutex);
+	mmap_control += munmap(route->cnt_mutex, sizeof(sem_t));
 	mmap_control += munmap(route->to_pick, route->num_of_stations * sizeof(int));
 	mmap_control += munmap(route->to_drop, route->num_of_stations * sizeof(int));
+	mmap_control += munmap(route->counter, sizeof(int));
 	for(int station = 0; station < route->num_of_stations; station++)
 	{
 		sem_control += sem_destroy(route->isbus[station]);
@@ -156,9 +166,13 @@ int route_cleanup(Route *route)
 		fprintf(stderr, "Shared memory failed to deallocate!\n");
 		return 1;
 	}
+	if(fclose(route->logfile) == EOF)
+	{
+		printf("Log file failed to close!\n");
+		return 1;
+	}
 	return 0;
 }
-
 
 int bus(Bus *bus, Route *route)
 {
@@ -169,21 +183,25 @@ int bus(Bus *bus, Route *route)
 		return -1;
 	}else if(check_pid > 0)
 		return check_pid;
-
+	sem_wait(route->cnt_mutex);
+	fprintf(route->logfile, "%d: BUS: started\n", ++(*route->counter));
+	sem_post(route->cnt_mutex);
 	while((*bus->total_passengers_left_ptr) != 0)//maybe change to do-while
 	{
 		for(int station = 0; station < route->num_of_stations; station++)
 		{
 			usleep(rand()%(bus->max_transfer_time+1));
 			sem_wait(route->cnt_mutex);
-			printf("%d: BUS: arrived to %d\n", ++(*route->counter), station+1);
+			fprintf(route->logfile, "%d: BUS: arrived to ", ++(*route->counter));
+			fprintf(route->logfile, (station < route->num_of_stations - 1)?("%d\n"):("final\n"), station+1);
 			sem_post(route->cnt_mutex);
 			///START OF THE CRITICAL SECTION MUTEX1///
 			sem_wait(route->gl_inout);
 			if(((*bus->seats_left) == 0 || route->to_pick[station] == 0) && route->to_drop[station] == 0)
 			{
 				sem_wait(route->cnt_mutex);
-				printf("%d: BUS: leaving %d\n", ++(*route->counter), station+1);
+				fprintf(route->logfile, "%d: BUS: leaving ", ++(*route->counter));
+				fprintf(route->logfile, (station < route->num_of_stations - 1)?("%d\n"):("final\n"), station+1);
 				sem_post(route->cnt_mutex);
 				sem_post(route->gl_inout);
 				///END OF THE CRITICAL SECTION MUTEX1///
@@ -197,10 +215,14 @@ int bus(Bus *bus, Route *route)
 			sem_wait(route->isbus[station]);
 			sem_post(bus->gone);
 			sem_wait(route->cnt_mutex);
-			printf("%d: BUS: leaving %d\n", ++(*route->counter), station+1);
+			fprintf(route->logfile, "%d: BUS: leaving ", ++(*route->counter));
+			fprintf(route->logfile, (station < route->num_of_stations - 1)?("%d\n"):("final\n"), station+1);
 			sem_post(route->cnt_mutex);
 		}
 	}
+	sem_wait(route->cnt_mutex);
+	fprintf(route->logfile, "%d: BUS: finish\n", ++(*route->counter));
+	sem_post(route->cnt_mutex);
 	return 0;
 }
 
@@ -214,13 +236,13 @@ int skiist(Skiist *skiist, Bus *bus, Route *route)
 	}else if(check_pid > 0)
 		return check_pid;
 	sem_wait(route->cnt_mutex);
-	printf("%d: L %d: started\n", ++(*route->counter), skiist->name);
+	fprintf(route->logfile, "%d: L %d: started\n", ++(*route->counter), skiist->name);
 	sem_post(route->cnt_mutex);
 	usleep(rand()%(skiist->max_breakfast_time+1));
 	///START OF CRITICAL SECTION MUTEX1///
 	sem_wait(route->gl_inout);
 	sem_wait(route->cnt_mutex);
-	printf("%d: L %d: arrived to %d\n", ++(*route->counter), skiist->name, skiist->from);
+	fprintf(route->logfile, "%d: L %d: arrived to %d\n", ++(*route->counter), skiist->name, skiist->from);
 	sem_post(route->cnt_mutex);
 	route->to_pick[skiist->from-1]++;//transport me CRITICAL1
 	sem_post(route->gl_inout);
@@ -240,7 +262,7 @@ int skiist(Skiist *skiist, Bus *bus, Route *route)
 			route->to_pick[skiist->from-1]--;//doesnt wait anymore CRITICAL1 DATA
 			route->to_drop[skiist->to-1]++;//drop me there CRITICAL1 DATA
 			sem_wait(route->cnt_mutex);
-			printf("%d: L %d: boarding\n", ++(*route->counter), skiist->name);
+			fprintf(route->logfile, "%d: L %d: boarding\n", ++(*route->counter), skiist->name);
 			sem_post(route->cnt_mutex);
 			(*bus->seats_left)--;//CRITICAL
 			if(((*bus->seats_left) == 0 || route->to_pick[skiist->from-1] == 0) && route->to_drop[skiist->from-1] == 0) //CRITICAL DATA
@@ -267,7 +289,7 @@ int skiist(Skiist *skiist, Bus *bus, Route *route)
 	///START OF CRITICAL SECTION MUTEX1///
 	sem_wait(route->gl_inout);
 	sem_wait(route->cnt_mutex);
-	printf("%d: L %d: going to ski\n", ++(*route->counter), skiist->name);
+	fprintf(route->logfile, "%d: L %d: going to ski\n", ++(*route->counter), skiist->name);
 	sem_post(route->cnt_mutex);
 	route->to_drop[skiist->to-1]--;//already dropped CRITICAL1 DATA
 	(*bus->total_passengers_left_ptr)--;//CRITICAL1 DATA, MUST BE ATOMIC
@@ -358,7 +380,7 @@ int main(int argc, char** argv)
 	}
 
 	Bus skibus = bus_init(args[BUS_CAPACITY-1], args[SKIERS_NUM-1], args[TB-1]);//create a bus
-	Route skitour = route_init(args[STOPS_NUM-1]);//create a route
+	Route skitour = route_init(args[STOPS_NUM-1]+1);//create a route
 	if(skibus.max_transfer_time == -1 || skitour.num_of_stations == -1)
 	{
 		//printf("There was a cleanup");
@@ -385,7 +407,7 @@ int main(int argc, char** argv)
 	for(int skiist_num = 0; skiist_num < args[SKIERS_NUM-1]; skiist_num++)
 	{
 		srand(((skiist_num * skiist_num)^(~0))<<(skiist_num)%sizeof(int));//pseudo-random number generator
-		Skiist my_skiist = {skiist_num+1, rand()%(skitour.num_of_stations-1)+1, args[STOPS_NUM-1], args[TL-1]};//init a skiist, 1 command
+		Skiist my_skiist = {skiist_num+1, rand()%(skitour.num_of_stations)+1, args[STOPS_NUM-1]+1, args[TL-1]};//init a skiist, 1 command
 		//my_skiist.to = my_skiist.from + rand()%(skitour.num_of_stations - my_skiist.from) + 1;
 		int skiist_proc;
 		switch(skiist_proc = skiist(&my_skiist, &skibus, &skitour))
