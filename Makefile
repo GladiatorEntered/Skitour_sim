@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS=-Wall -Wextra -Werror -pedantic -std=gnu99
+CFLAGS=-Wall -Wextra -Werror -pedantic -lrt -pthread -std=gnu99
 DEPS=skitour.h
 
 default: proj2
